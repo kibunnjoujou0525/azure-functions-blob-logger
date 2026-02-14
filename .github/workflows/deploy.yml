@@ -1,0 +1,41 @@
+name: Deploy Azure Functions
+
+on:
+  push:
+    branches: [ main ] # mainブランチにコードがpushされたら自動起動
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # 1. Bicepによるインフラ更新
+      - name: Deploy Infrastructure (Bicep)
+        uses: azure/arm-deploy@v2
+        with:
+          resourceGroupName: RG-Portfolio-Automation
+          template: ./main.bicep
+
+      # 2. .NET 8 アプリのビルド
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        run: dotnet publish -c Release -o ./publish
+
+      # 3. Azure Functionsへのデプロイ
+      - name: Deploy to Azure Functions
+        uses: azure/functions-action@v1
+        with:
+          # Bicepで作成される実際の関数名
+          app-name: 'fn-batch-sim-20260211'
+          package: ./publish
