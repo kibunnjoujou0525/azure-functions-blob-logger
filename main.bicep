@@ -97,9 +97,6 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 // ======================================================
 // 実際にFunction Appを作成する
 // マネージドIDを付与してAzureリソースへのアクセス権限を付与
-var storageKeys = storageAccount.listKeys()
-var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageKeys.keys[0].value};EndpointSuffix=core.windows.net'
-
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name: functionAppName
   location: location
@@ -115,7 +112,10 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
       minTlsVersion: '1.2'                 // 最低TLSバージョン
       ftpsState: 'Disabled'                 // FTPを無効化
       appSettings: [
-        { name: 'AzureWebJobsStorage', value: storageConnectionString } // ストレージ接続文字列
+        {
+          name: 'AzureWebJobsStorage'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
+        } // 変数を使わず直接呼ぶ
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString } // App Insights 接続
         { name: 'StorageConfig__blobServiceUri', value: storageAccount.properties.primaryEndpoints.blob } // Blob URL
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'dotnet-isolated' } // Workerランタイム
@@ -124,6 +124,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
     }
   }
 }
+
 
 
 // ======================================================
