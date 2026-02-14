@@ -96,8 +96,9 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 // 5. Azure Functions 本体
 // ======================================================
 // 実際にFunction Appを作成する
-// SystemAssigned Identity（マネージドID）を付与してAzureリソースにアクセス可能に
-var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${listKeys(storageAccount.id, '2023-01-01').keys[0].value};EndpointSuffix=core.windows.net'
+// マネージドIDを付与してAzureリソースへのアクセス権限を付与
+var storageKeys = storageAccount.listKeys()
+var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageKeys.keys[0].value};EndpointSuffix=core.windows.net'
 
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name: functionAppName
