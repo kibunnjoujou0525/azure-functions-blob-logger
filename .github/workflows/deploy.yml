@@ -22,6 +22,7 @@ jobs:
         with:
           resourceGroupName: RG-Portfolio-Automation
           template: ./main.bicep
+          failOnStdErr: false
 
       # 2. .NET 8 アプリのビルド
       - name: Setup .NET
