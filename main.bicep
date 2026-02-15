@@ -1,9 +1,8 @@
 // ======================================================
 // 0. パラメータ定義
 // ======================================================
-// デプロイ時に外部から渡せる値
-// デフォルト値を設定しているのでそのままでもデプロイ可能
-@description('リソースを配置する場所')
+
+@description('リソースを配置する場所（リソースグループの場所を継承）')
 param location string = resourceGroup().location
 
 @description('ストレージアカウントの一意の名前')
@@ -12,27 +11,29 @@ param storageAccountName string = 'stlogsim2026'
 @description('Azure Functionsの一意の名前')
 param functionAppName string = 'fn-batch-sim-20260211'
 
-@description('App Service Planの名前')
+@description('関数アプリを動かすサーバーレス実行基盤の名前')
 param appServicePlanName string = 'ASP-RGPortfolioAutomation'
 
-@description('Application Insightsの名前')
+@description('アプリのパフォーマンスやエラーを監視するApplication Insightsの名前')
 param appInsightsName string = 'ai-batch-sim-20260211'
 
-@description('Log Analytics Workspaceの名前')
+@description('すべてのログを集約してKQLで分析するためのワークスペース名')
 param logAnalyticsName string = 'law-portfolio-automation'
 
 
 // ======================================================
 // 1. Log Analytics Workspace
 // ======================================================
-// Azure上でログを収集・分析するためのワークスペース
-// Function Appやストレージの診断ログを集約できる
+
+// ログを集約する場所であり、関数アプリやストレージの稼働データをここに集め、KQLで分析可能にする。
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
   location: location
   properties: {
-    sku: { name: 'PerGB2018' }      // 従量課金プラン
-    retentionInDays: 30             // データ保持日数（30日）
+    // 1GBごとの従量課金であり、個人開発や少量ログ向け
+    sku: { name: 'PerGB2018' }
+    // コスト抑制のため、データ保持期間を最短の30日に設定
+    retentionInDays: 30
   }
 }
 
@@ -40,19 +41,23 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09
 // ======================================================
 // 2. ストレージアカウント
 // ======================================================
-// Function App が内部で使用するストレージ
-// BlobやQueue、Tableを保持できる
+
+// 生成されたログファイルの保存先
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
   location: location
-  sku: { name: 'Standard_LRS' }    // 標準冗長（ローカル）
-  kind: 'StorageV2'                // 最新のストレージタイプ
+  // 冗長性を抑えてコストを最小化
+  sku: { name: 'Standard_LRS' }
+  kind: 'StorageV2'
   properties: {
-    accessTier: 'Hot'                      // 頻繁にアクセスするデータ向け
-    supportsHttpsTrafficOnly: true         // HTTPSのみ許可
-    allowBlobPublicAccess: false           // 公開禁止
-    minimumTlsVersion: 'TLS1_2'            // TLS1.2以上
-    defaultToOAuthAuthentication: true     // 安全な認証方式
+    // 頻繁な読み書きに適したHot層
+    accessTier: 'Hot'
+    // 外部からの匿名アクセスを禁止するセキュリティ設定「https」
+    supportsHttpsTrafficOnly: true
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    // 鍵ではなく「権限」によるアクセスを優先
+    defaultToOAuthAuthentication: true
   }
 }
 
@@ -60,18 +65,20 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 // ======================================================
 // 3. App Service Plan
 // ======================================================
-// Function Appを動かすための実行基盤
-// LinuxのConsumptionプラン（Y1/Dynamic）で自動スケール
+
+// 関数アプリを動かすサーバーレスな実行基盤
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name: appServicePlanName
   location: location
   sku: {
+    // 消費プラン（Consumption）：実行された分だけ課金され、月100万実行まで無料
     name: 'Y1'
     tier: 'Dynamic'
   }
   kind: 'functionapp'
   properties: {
-    reserved: true // Linux利用
+    // Linux OS を使用。
+    reserved: true
   }
 }
 
@@ -79,14 +86,15 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
 // ======================================================
 // 4. Application Insights
 // ======================================================
-// Function Appの動作監視やログ収集に使用
-// Log Analytics Workspace にも接続
+
+// アプリケーション診断であり、実行回数やエラーをリアルタイム監視
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: appInsightsName
   location: location
   kind: 'web'
   properties: {
     Application_Type: 'web'
+    // 収集した生データを保存するために Log Analyticsワークスペースと紐付け
     WorkspaceResourceId: logAnalyticsWorkspace.id
   }
 }
@@ -95,33 +103,39 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 // ======================================================
 // 5. Azure Functions 本体
 // ======================================================
-// 実際にFunction Appを作成する
-// マネージドIDを付与してAzureリソースへのアクセス権限を付与
+
+// プログラムが実際に稼働するリソース
+// 内部動作に必要なストレージキーを一時的に取得。
 var storageKeys = storageAccount.listKeys()
 
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name: functionAppName
   location: location
   kind: 'functionapp,linux'
+  // 「システム割り当てマネージドID」を有効化し、Function自身がAzure内で身分証明を所持
   identity: {
-    type: 'SystemAssigned' // 自動でマネージドIDを付与
+    type: 'SystemAssigned'
   }
   properties: {
     serverFarmId: appServicePlan.id
-    httpsOnly: true  // HTTPSのみ許可
+    httpsOnly: true
     siteConfig: {
-      linuxFxVersion: 'DOTNET-ISOLATED|8.0' // .NET 8.0 Isolated Worker
-      minTlsVersion: '1.2'                 // 最低TLSバージョン
-      ftpsState: 'Disabled'                 // FTPを無効化
+      // .NET 8 Isolated 実行環境の指定
+      linuxFxVersion: 'DOTNET-ISOLATED|8.0'
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
       appSettings: [
+        // アプリケーションの動作に必要な内部ストレージ接続。
         {
-           name: 'AzureWebJobsStorage'
-           value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageKeys.keys[0].value};EndpointSuffix=core.windows.net'
-       } // 変数を使わず直接呼ぶ
-        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString } // App Insights 接続
-        { name: 'StorageConfig__blobServiceUri', value: storageAccount.properties.primaryEndpoints.blob } // Blob URL
-        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'dotnet-isolated' } // Workerランタイム
-        { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }          // Functionsバージョン
+          name: 'AzureWebJobsStorage'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageKeys.keys[0].value};EndpointSuffix=core.windows.net'
+        }
+        // Application Insights への接続文字列
+        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
+        // C#コードから参照する Blob URLであり、接続文字列ではなくURLのみを持たせることでよりセキュアに
+        { name: 'StorageConfig__blobServiceUri', value: storageAccount.properties.primaryEndpoints.blob }
+        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'dotnet-isolated' }
+        { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
       ]
     }
   }
@@ -129,24 +143,25 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
 
 
 // ======================================================
-// 6. 診断設定（Function App / Blob）
+// 6. 診断設定（監視の統合）
 // ======================================================
-// Function AppのログをLog Analyticsに送る
+
+// 関数アプリのシステムログをLog Analyticsに転送する設定
 resource functionDiagnosticSettings 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'to-law-logs'
   scope: functionApp
   properties: {
     workspaceId: logAnalyticsWorkspace.id
     logs: [
-      { category: 'FunctionAppLogs', enabled: true } // 標準ログ
+      { category: 'FunctionAppLogs', enabled: true }
     ]
     metrics: [
-      { category: 'AllMetrics', enabled: true } // メトリクスも収集
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
 
-// Blobストレージの診断設定
+// ストレージへの「書き込み」「削除」イベントを監視
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' existing = {
   parent: storageAccount
   name: 'default'
@@ -158,28 +173,32 @@ resource storageDiagnosticSettings 'Microsoft.Insights/diagnosticSettings@2021-0
   properties: {
     workspaceId: logAnalyticsWorkspace.id
     logs: [
-      { category: 'StorageWrite', enabled: true }  // 書き込みログ
-      { category: 'StorageDelete', enabled: true } // 削除ログ
+      { category: 'StorageWrite', enabled: true }
+      { category: 'StorageDelete', enabled: true }
     ]
     metrics: [
-      { category: 'Transaction', enabled: true }   // ストレージの処理メトリクス
+      { category: 'Transaction', enabled: true }
     ]
   }
 }
 
 
 // ======================================================
-// 7. RBAC（マネージドIDにストレージ権限付与）
+// 7. RBAC（権限の自動割り当て）
 // ======================================================
-// Function App がBlobを操作できるように権限を割り当て
-var blobRoleId  = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe') // Storage Blob Data Owner
 
+// ストレージBlobデータ共同作成者の権限ID
+var blobRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+
+// 関数アプリ（マネージドID）に対して、ストレージを操作する権限を付与し、プログラムから接続文字列を使わずにBlobを操作
 resource blobRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, functionApp.id, 'blob') // 一意の名前を生成
+  // 名前は一意である必要があるため、IDを組み合わせて生成。
+  name: guid(storageAccount.id, functionApp.id, 'blob')
   scope: storageAccount
   properties: {
     roleDefinitionId: blobRoleId
+    // 上記で作成したIDを紐付け。
     principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal' // マネージドID用
+    principalType: 'ServicePrincipal'
   }
 }
