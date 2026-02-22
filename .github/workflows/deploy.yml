@@ -36,7 +36,7 @@ jobs:
 
       # アプリケーションをコンパイルし、./publish ディレクトリに出力
       - name: Build
-        run: dotnet publish -c Release -o ./publish
+        run: dotnet publish Azure.csproj -c Release -o ./publish
 
       # 3. Azure Functionsへのデプロイ
       # 最新化したインフラ基盤に対して、ビルド済みのバイナリを配備
